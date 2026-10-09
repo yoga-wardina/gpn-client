@@ -2,3 +2,4 @@ node_modules/
 dist/
 gpn.config.json
 *.log
+meta.json

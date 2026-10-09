@@ -6,6 +6,7 @@ import type { GameWatcher } from "../watcher.ts";
 import type { GpnApi } from "../api.ts";
 import type { Config } from "../config.ts";
 import { saveConfig } from "../config.ts";
+import { getCachedMeta, resolveMeta } from "../meta.ts";
 
 import HTML from "./index.html" with { type: "text" };
 
@@ -29,9 +30,17 @@ export function startUi(port: number, deps: UiDeps) {
           procs: watcher.listProcs(),
           targets: watcher.listTargets(),
           watched: watcher.listWatched(),
+          meta: Object.fromEntries(watcher.listWatched().map((exe) => [exe, getCachedMeta(exe) ?? null])),
           gpnServerUrl: config.gpnServerUrl,
           running: true,
         });
+      }
+
+      if (url.pathname === "/api/meta" && req.method === "POST") {
+        const { exe } = await req.json();
+        if (!exe) return json({ error: "exe required" }, 400);
+        const meta = await resolveMeta(exe);
+        return json({ ok: true, exe, meta });
       }
 
       if (url.pathname === "/api/watch" && req.method === "POST") {
@@ -40,6 +49,7 @@ export function startUi(port: number, deps: UiDeps) {
         watcher.watchExecutable(exe);
         const games = [...new Set([...config.games, exe])];
         saveConfig({ games });
+        resolveMeta(exe).catch(() => {}); // fire-and-forget icon/name resolution
         return json({ ok: true, watched: watcher.listWatched() });
       }
 
