@@ -6,6 +6,7 @@ import { startUi } from "./ui/server.ts";
 import { config, loadConfig } from "./config.ts";
 import { startTray, cleanStaleExitFlag } from "./tray.ts";
 import { TunnelManager } from "./tunnel.ts";
+import { startSampling } from "./traffic.ts";
 
 await loadConfig();
 cleanStaleExitFlag();
@@ -14,6 +15,9 @@ const tunnel = new TunnelManager();
 
 const api = new GpnApi(config.gpnServerUrl, config.gpnToken);
 const watcher = new GameWatcher(config.pollIntervalMs);
+
+// traffic sampler for live in/out rates (1s)
+startSampling(1000);
 
 // UI server (local web dashboard, ExitLag-style)
 startUi(config.uiPort, {

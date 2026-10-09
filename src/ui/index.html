@@ -65,6 +65,16 @@
   }
   .row { display: flex; gap: 8px; }
   .empty { color: var(--dim); font-size: 13px; padding: 18px; text-align: center; }
+  .traffic-row { display: flex; gap: 10px; margin-bottom: 12px; align-items: stretch; }
+  .traffic-box {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
+    padding: 10px 16px; min-width: 110px; display: flex; flex-direction: column; justify-content: center;
+  }
+  .t-label { font-size: 11px; letter-spacing: 1px; color: var(--dim); }
+  .t-rate { font-size: 20px; font-weight: 700; font-family: Consolas, monospace; margin-top: 2px; }
+  #rxRate { color: var(--accent); }
+  #txRate { color: var(--accent2); }
+  #graph { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; flex: 1; }
 </style>
 </head>
 <body>
@@ -81,6 +91,17 @@
     <div id="games" style="margin-top:12px"></div>
 
     <h2>Live Server Targets</h2>
+    <div class="traffic-row">
+      <div class="traffic-box">
+        <div class="t-label">▼ DOWN</div>
+        <div class="t-rate" id="rxRate">0 KB/s</div>
+      </div>
+      <div class="traffic-box">
+        <div class="t-label">▲ UP</div>
+        <div class="t-rate" id="txRate">0 KB/s</div>
+      </div>
+      <canvas id="graph" width="440" height="60"></canvas>
+    </div>
     <table>
       <thead><tr><th>Protocol</th><th>IP</th><th>Port</th><th>First seen</th></tr></thead>
       <tbody id="targets"><tr><td colspan="4" class="empty">No game traffic detected yet.</td></tr></tbody>
@@ -218,8 +239,52 @@
     await fetch('/api/tunnel/teardown', { method: 'POST' });
     refreshTunnel();
   }
+  // --- live traffic via WebSocket ---
+  const rxHist = [], txHist = [];
+  function fmtRate(b) {
+    if (b >= 1048576) return (b/1048576).toFixed(1) + ' MB/s';
+    if (b >= 1024) return (b/1024).toFixed(1) + ' KB/s';
+    return b + ' B/s';
+  }
+  function drawGraph() {
+    const c = document.getElementById('graph');
+    const ctx = c.getContext('2d');
+    const W = c.width, H = c.height;
+    ctx.clearRect(0, 0, W, H);
+    const max = Math.max(1024, ...rxHist, ...txHist);
+    const drawLine = (arr, color) => {
+      ctx.beginPath();
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 1.5;
+      arr.forEach((v, i) => {
+        const x = (i / 59) * W;
+        const y = H - (v / max) * (H - 6) - 3;
+        i ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
+      });
+      ctx.stroke();
+    };
+    drawLine(rxHist, '#22d3ee');
+    drawLine(txHist, '#6366f1');
+  }
+  function connectWs() {
+    const ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws');
+    ws.onmessage = (ev) => {
+      try {
+        const m = JSON.parse(ev.data);
+        if (m.type !== 'traffic') return;
+        document.getElementById('rxRate').textContent = fmtRate(m.rxPerSec);
+        document.getElementById('txRate').textContent = fmtRate(m.txPerSec);
+        rxHist.push(m.rxPerSec); txHist.push(m.txPerSec);
+        if (rxHist.length > 60) rxHist.shift();
+        if (txHist.length > 60) txHist.shift();
+        drawGraph();
+      } catch {}
+    };
+    ws.onclose = () => setTimeout(connectWs, 2000);
+  }
   refresh();
   refreshTunnel();
+  connectWs();
   setInterval(refresh, 2000);
   setInterval(refreshTunnel, 4000);
 </script>

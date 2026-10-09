@@ -8,6 +8,7 @@ import type { Config } from "../config.ts";
 import { saveConfig } from "../config.ts";
 import { getCachedMeta, resolveMeta } from "../meta.ts";
 import type { TunnelManager } from "../tunnel.ts";
+import { currentSample, startSampling } from "../traffic.ts";
 
 import HTML from "./index.html" with { type: "text" };
 
@@ -21,8 +22,9 @@ interface UiDeps {
 export function startUi(port: number, deps: UiDeps) {
   const { watcher, api, config, tunnel } = deps;
   watcher.start();
+  startSampling(1000);
 
-  Bun.serve({
+  const server = Bun.serve({
     port,
     async fetch(req) {
       const url = new URL(req.url);
@@ -93,6 +95,17 @@ export function startUi(port: number, deps: UiDeps) {
         return json({ ok: true, state: tunnel.state });
       }
 
+      if (url.pathname === "/api/traffic") {
+        return json(currentSample());
+      }
+
+      // WebSocket: live traffic + state stream (1s)
+      if (url.pathname === "/ws") {
+        const success = server.upgrade(req, { data: {} });
+        if (!success) return new Response("upgrade failed", { status: 400 });
+        return undefined as unknown as Response;
+      }
+
       if (url.pathname === "/api/ping" && req.method === "POST") {
         try {
           return json({ ok: true, result: await api.ping() });
@@ -106,6 +119,37 @@ export function startUi(port: number, deps: UiDeps) {
       }
 
       return new Response("Not found", { status: 404 });
+    },
+    websocket: {
+      open(ws) {
+        // start a per-socket push loop
+        let stop = false;
+        (ws.data as unknown as { _stop?: () => void })._stop = () => {
+          stop = true;
+        };
+        (async () => {
+          while (!stop) {
+            const s = currentSample();
+            try {
+              ws.send(JSON.stringify({
+                type: "traffic",
+                rxPerSec: Math.round(s.rxPerSec),
+                txPerSec: Math.round(s.txPerSec),
+                rxBytes: s.rxBytes,
+                txBytes: s.txBytes,
+                ts: s.ts,
+                targets: watcher.listTargets().length,
+                procs: watcher.listProcs().length,
+              }));
+            } catch {}
+            await new Promise((r) => setTimeout(r, 1000));
+          }
+        })();
+      },
+      message() {},
+      close(ws) {
+        (ws.data as unknown as { _stop?: () => void })._stop?.();
+      },
     },
   });
 }
