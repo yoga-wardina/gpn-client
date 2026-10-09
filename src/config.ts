@@ -31,7 +31,15 @@ export const DEFAULT_CONFIG: Config = {
   tunnelTeardownWhenIdle: true,
 };
 
-const CONFIG_PATH = join(import.meta.dir, "..", "gpn.config.json");
+// In a compiled exe, import.meta.dir points into the virtual FS (B:\~BUN\...).
+// Use the exe's real directory so config lives next to GPNClient.exe.
+import { dirname } from "node:path";
+import { argv0 } from "node:process";
+
+const EXE_DIR = argv0 && existsSync(argv0) ? dirname(argv0) : process.cwd();
+
+export const CONFIG_PATH = join(EXE_DIR, "gpn.config.json");
+export const META_PATH = join(EXE_DIR, "meta.json");
 
 export function loadConfig(): Promise<void> {
   return new Promise((resolve) => {

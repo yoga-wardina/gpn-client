@@ -20,7 +20,7 @@ export interface GameMeta {
   source: "versioninfo" | "filename";
 }
 
-const CACHE_PATH = join(import.meta.dir, "..", "meta.json");
+import { META_PATH as CACHE_PATH } from "./config.ts";
 const cache = new Map<string, GameMeta>();
 
 if (existsSync(CACHE_PATH)) {
