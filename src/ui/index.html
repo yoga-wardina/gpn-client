@@ -7,7 +7,7 @@
   :root {
     --bg: #0b0e14; --panel: #121722; --panel2: #171d2b; --border: #232b3d;
     --accent: #22d3ee; --accent2: #6366f1; --text: #e5e9f0; --dim: #8b95a8;
-    --green: #34d399; --red: #f87171;
+    --green: #34d399; --red: #f87171; --amber: #fbbf24;
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body {
@@ -28,6 +28,43 @@
   .dot.off { background: var(--red); box-shadow: 0 0 8px var(--red); }
   .wrap { max-width: 960px; margin: 0 auto; padding: 24px; }
   h2 { font-size: 14px; text-transform: uppercase; letter-spacing: 1.5px; color: var(--dim); margin: 24px 0 12px; }
+
+  /* ===== hero status card ===== */
+  .hero {
+    display: grid; grid-template-columns: auto 1fr auto; gap: 20px; align-items: center;
+    background: linear-gradient(135deg, rgba(99,102,241,.12), rgba(34,211,238,.06));
+    border: 1px solid var(--border); border-radius: 16px; padding: 20px 24px; margin-bottom: 8px;
+  }
+  .hero-ring {
+    width: 74px; height: 74px; border-radius: 50%;
+    display: grid; place-items: center; font-size: 26px; font-weight: 800;
+    border: 3px solid var(--red); color: var(--red); flex: none;
+  }
+  .hero-ring.on { border-color: var(--green); color: var(--green); box-shadow: 0 0 18px rgba(52,211,153,.35); }
+  .hero-main .h-title { font-size: 20px; font-weight: 700; }
+  .hero-main .h-sub { font-size: 13px; color: var(--dim); margin-top: 4px; }
+  .hero-stats { display: flex; gap: 26px; }
+  .hstat { text-align: right; }
+  .hstat .v { font-size: 18px; font-weight: 700; font-family: Consolas, monospace; }
+  .hstat .l { font-size: 10px; letter-spacing: 1.2px; color: var(--dim); text-transform: uppercase; margin-top: 2px; }
+  .hstat .v.cyan { color: var(--accent); }
+  .hstat .v.indigo { color: var(--accent2); }
+
+  .steps { display: flex; gap: 8px; margin: 14px 0 4px; flex-wrap: wrap; }
+  .step {
+    display: flex; align-items: center; gap: 7px; font-size: 12.5px;
+    background: var(--panel); border: 1px solid var(--border); border-radius: 99px;
+    padding: 6px 14px; color: var(--dim);
+  }
+  .step .n {
+    width: 18px; height: 18px; border-radius: 50%; display: grid; place-items: center;
+    background: var(--panel2); border: 1px solid var(--border); font-size: 10px; font-weight: 700; flex: none;
+  }
+  .step.done { color: var(--text); border-color: rgba(52,211,153,.4); }
+  .step.done .n { background: var(--green); color: #0b0e14; border-color: var(--green); }
+  .step.active { color: var(--accent); border-color: rgba(34,211,238,.4); }
+  .step.active .n { border-color: var(--accent); color: var(--accent); }
+
   .card {
     background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
     padding: 16px; margin-bottom: 12px; display: flex; align-items: center; gap: 14px;
@@ -46,6 +83,7 @@
   }
   .card button:hover, .btn:hover { border-color: var(--accent); color: var(--accent); }
   .btn.primary { background: linear-gradient(135deg, var(--accent2), var(--accent)); color: #fff; border: none; font-weight: 600; }
+  .btn:disabled { opacity: .45; cursor: default; }
   .add-row { display: flex; gap: 8px; }
   .add-row input {
     flex: 1; background: var(--panel2); border: 1px solid var(--border); border-radius: 8px;
@@ -59,6 +97,8 @@
   .tag { display: inline-block; padding: 2px 8px; border-radius: 99px; font-size: 11px; font-weight: 600; }
   .tag.udp { background: rgba(99,102,241,.15); color: var(--accent2); }
   .tag.tcp { background: rgba(34,211,238,.12); color: var(--accent); }
+  .tag.routed { background: rgba(52,211,153,.12); color: var(--green); }
+  .tag.direct { background: rgba(251,191,36,.1); color: var(--amber); }
   .settings input {
     width: 100%; background: var(--panel2); border: 1px solid var(--border); border-radius: 8px;
     color: var(--text); padding: 10px 12px; font-size: 14px; outline: none; margin-bottom: 10px;
@@ -75,6 +115,8 @@
   #rxRate { color: var(--accent); }
   #txRate { color: var(--accent2); }
   #graph { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; flex: 1; }
+  .session-line { font-size: 12px; color: var(--dim); margin: 8px 2px 0; }
+  .session-line b { color: var(--text); font-family: Consolas, monospace; }
 </style>
 </head>
 <body>
@@ -83,6 +125,24 @@
     <div class="status-pill"><div class="dot" id="dot"></div><span id="statusText">connecting…</span></div>
   </div>
   <div class="wrap">
+
+    <!-- hero: what state am I in -->
+    <div class="hero">
+      <div class="hero-ring" id="heroRing">✕</div>
+      <div class="hero-main">
+        <div class="h-title" id="heroTitle">Not protected</div>
+        <div class="h-sub" id="heroSub">Game traffic is going direct through your ISP.</div>
+      </div>
+      <div class="hero-stats">
+        <div class="hstat"><div class="v cyan" id="heroRx">0 B/s</div><div class="l">down</div></div>
+        <div class="hstat"><div class="v indigo" id="heroTx">0 B/s</div><div class="l">up</div></div>
+        <div class="hstat"><div class="v" id="heroSession">—</div><div class="l">session</div></div>
+      </div>
+    </div>
+
+    <!-- what to do next -->
+    <div class="steps" id="steps"></div>
+
     <h2>Watched Games</h2>
     <div class="add-row">
       <input id="exeInput" placeholder="Game executable name or path (e.g. AION2.exe)">
@@ -94,30 +154,31 @@
     <div class="traffic-row">
       <div class="traffic-box">
         <div class="t-label">▼ DOWN</div>
-        <div class="t-rate" id="rxRate">0 KB/s</div>
+        <div class="t-rate" id="rxRate">0 B/s</div>
       </div>
       <div class="traffic-box">
         <div class="t-label">▲ UP</div>
-        <div class="t-rate" id="txRate">0 KB/s</div>
+        <div class="t-rate" id="txRate">0 B/s</div>
       </div>
       <canvas id="graph" width="440" height="60"></canvas>
     </div>
     <table>
-      <thead><tr><th>Protocol</th><th>IP</th><th>Port</th><th>First seen</th></tr></thead>
-      <tbody id="targets"><tr><td colspan="4" class="empty">No game traffic detected yet.</td></tr></tbody>
+      <thead><tr><th>Protocol</th><th>IP</th><th>Port</th><th>Routing</th><th>First seen</th></tr></thead>
+      <tbody id="targets"><tr><td colspan="5" class="empty">No game traffic detected yet.</td></tr></tbody>
     </table>
+    <div class="session-line" id="sessionLine"></div>
 
     <h2>Tunnel</h2>
     <div class="card" style="display:block">
-      <div class="row" style="margin-bottom:10px">
+      <div class="row" style="margin-bottom:10px;flex-wrap:wrap">
         <span id="tunnelStatus" style="font-size:13px;color:var(--dim)">tunnel: unknown</span>
         <span id="tunnelIps" class="mono" style="font-size:12px;color:var(--dim);margin-left:auto"></span>
       </div>
       <div class="row">
-        <button class="btn primary" onclick="tunnelRegister()">Connect tunnel</button>
+        <button class="btn primary" id="connectBtn" onclick="tunnelRegister()">Connect tunnel</button>
         <button class="btn" onclick="tunnelTeardown()">Disconnect</button>
       </div>
-      <div class="sub" style="margin-top:8px;font-size:12px;color:var(--dim)">Requires WireGuard for Windows installed. First connect must run as Administrator.</div>
+      <div class="sub" style="margin-top:8px;font-size:12px;color:var(--dim)">Requires WireGuard for Windows. Runs as a background service — first install needs Administrator.</div>
     </div>
 
     <h2>Settings</h2>
@@ -133,8 +194,62 @@
   </div>
 <script>
   function esc(s) {
-    return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+    return String(s).replace(/[&<>\"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   }
+  function fmtRate(b) {
+    if (b >= 1048576) return (b/1048576).toFixed(1) + ' MB/s';
+    if (b >= 1024) return (b/1024).toFixed(1) + ' KB/s';
+    return Math.round(b) + ' B/s';
+  }
+  let tunnelIsUp = false, lastTargets = [];
+  let sessionStart = null;
+
+  // ===== hero + steps =====
+  function renderHero() {
+    const ring = document.getElementById('heroRing');
+    const title = document.getElementById('heroTitle');
+    const sub = document.getElementById('heroSub');
+    const stepsEl = document.getElementById('steps');
+    const gameLive = lastTargets.length > 0;
+
+    let step, sTitle, sSub;
+    if (tunnelIsUp && gameLive) {
+      ring.className = 'hero-ring on'; ring.textContent = '✓';
+      sTitle = 'Protected — game traffic via GPN';
+      sSub = 'Detected server IPs are routed through your tunnel.';
+      step = 3;
+    } else if (tunnelIsUp) {
+      ring.className = 'hero-ring on'; ring.textContent = '✓';
+      sTitle = 'Tunnel connected — waiting for game traffic';
+      sSub = 'No game server IPs detected yet. Launch or play the watched game.';
+      step = 2;
+    } else if (gameLive) {
+      ring.className = 'hero-ring'; ring.textContent = '!';
+      sTitle = 'Game detected — tunnel not connected';
+      sSub = 'Game traffic is going direct through your ISP. Connect the tunnel to route it via GPN.';
+      step = 1;
+    } else {
+      ring.className = 'hero-ring'; ring.textContent = '✕';
+      sTitle = 'Not protected';
+      sSub = 'Game traffic is going direct through your ISP.';
+      step = 0;
+    }
+    title.textContent = sTitle;
+    sub.textContent = sSub;
+
+    const steps = [
+      { n: 1, label: 'Add & watch game' },
+      { n: 2, label: 'Connect tunnel' },
+      { n: 3, label: 'Play via GPN' },
+    ];
+    stepsEl.innerHTML = steps.map(s => {
+      const cls = s.n < step ? 'step done' : s.n === step ? 'step active' : 'step';
+      const mark = s.n < step ? '✓' : s.n;
+      return `<div class="${cls}"><span class="n">${mark}</span>${s.label}</div>`;
+    }).join('');
+  }
+
+  // ===== state refresh =====
   async function refresh() {
     try {
       const s = await (await fetch('/api/state')).json();
@@ -170,18 +285,30 @@
       games.querySelectorAll('.remove-btn').forEach(b =>
         b.addEventListener('click', () => unwatch(b.dataset.exe)));
 
+      lastTargets = s.targets || [];
       const tb = document.getElementById('targets');
-      if (!s.targets.length) {
-        tb.innerHTML = '<tr><td colspan="4" class="empty">No game traffic detected yet.</td></tr>';
+      const routed = window._routedIps || [];
+      if (!lastTargets.length) {
+        tb.innerHTML = '<tr><td colspan="5" class="empty">No game traffic detected yet.</td></tr>';
       } else {
-        tb.innerHTML = s.targets.map(t => `
-          <tr>
+        tb.innerHTML = lastTargets.map(t => {
+          const isRouted = routed.includes(t.ip);
+          const tag = isRouted
+            ? '<span class="tag routed">via GPN</span>'
+            : '<span class="tag direct">direct</span>';
+          return `<tr>
             <td><span class="tag ${t.proto}">${t.proto.toUpperCase()}</span></td>
             <td class="mono">${esc(t.ip)}</td>
             <td class="mono">${t.port ?? '—'}</td>
+            <td>${tag}</td>
             <td class="mono">${new Date(t.firstSeen).toLocaleTimeString()}</td>
-          </tr>`).join('');
+          </tr>`;
+        }).join('');
       }
+      const routedCount = lastTargets.filter(t => routed.includes(t.ip)).length;
+      document.getElementById('sessionLine').innerHTML = lastTargets.length
+        ? `Routing: <b>${routedCount}</b> of <b>${lastTargets.length}</b> connections through GPN` : '';
+      renderHero();
     } catch (e) {
       document.getElementById('dot').classList.add('off');
       document.getElementById('statusText').textContent = 'ui error';
@@ -212,21 +339,29 @@
     el.textContent = r.ok ? '✓ server reachable' : '✗ ' + (r.error || 'unreachable');
     el.style.color = r.ok ? 'var(--green)' : 'var(--red)';
   }
+
+  // ===== tunnel =====
   async function refreshTunnel() {
     try {
       const r = await (await fetch('/api/tunnel/state')).json();
+      tunnelIsUp = r.state.tunnelUp;
+      window._routedIps = r.state.allowedIps || [];
       const el = document.getElementById('tunnelStatus');
-      if (r.state.tunnelUp) {
-        el.textContent = 'tunnel: connected (' + (r.state.vpnIp || '?') + ')';
-        el.style.color = 'var(--green)';
+      const btn = document.getElementById('connectBtn');
+      if (tunnelIsUp) {
+        el.innerHTML = 'tunnel: <span style="color:var(--green)">connected</span> — tunnel IP: <span class="mono">' + (r.state.vpnIp || '?') + '</span>';
+        btn.disabled = true;
       } else if (r.state.registered) {
-        el.textContent = 'tunnel: registered, down';
-        el.style.color = 'var(--dim)';
+        el.innerHTML = 'tunnel: <span style="color:var(--amber)">registered, down</span>';
+        btn.disabled = false;
       } else {
-        el.textContent = 'tunnel: not registered';
-        el.style.color = 'var(--dim)';
+        el.innerHTML = 'tunnel: <span style="color:var(--dim)">not connected</span>';
+        btn.disabled = false;
       }
-      document.getElementById('tunnelIps').textContent = (r.state.allowedIps || []).slice(0, 4).join(', ');
+      const shown = (window._routedIps || []).slice(0, 4).join(', ');
+      document.getElementById('tunnelIps').textContent = window._routedIps.length
+        ? `routed IPs (${window._routedIps.length}): ${shown}${window._routedIps.length > 4 ? ' …' : ''}` : '';
+      renderHero();
     } catch {}
   }
   async function tunnelRegister() {
@@ -239,13 +374,22 @@
     await fetch('/api/tunnel/teardown', { method: 'POST' });
     refreshTunnel();
   }
-  // --- live traffic via WebSocket ---
-  const rxHist = [], txHist = [];
-  function fmtRate(b) {
-    if (b >= 1048576) return (b/1048576).toFixed(1) + ' MB/s';
-    if (b >= 1024) return (b/1024).toFixed(1) + ' KB/s';
-    return b + ' B/s';
+
+  // ===== session timer =====
+  function renderSession() {
+    const el = document.getElementById('heroSession');
+    if (tunnelIsUp) {
+      if (!sessionStart) sessionStart = Date.now();
+      const mins = Math.floor((Date.now() - sessionStart) / 60000);
+      el.textContent = mins < 60 ? mins + 'm' : Math.floor(mins/60) + 'h' + String(mins%60).padStart(2,'0') + 'm';
+    } else {
+      sessionStart = null;
+      el.textContent = '—';
+    }
   }
+
+  // ===== live traffic via WebSocket =====
+  const rxHist = [], txHist = [];
   function drawGraph() {
     const c = document.getElementById('graph');
     const ctx = c.getContext('2d');
@@ -272,9 +416,12 @@
       try {
         const m = JSON.parse(ev.data);
         if (m.type !== 'traffic') return;
-        document.getElementById('rxRate').textContent = fmtRate(m.rxPerSec);
-        document.getElementById('txRate').textContent = fmtRate(m.txPerSec);
-        rxHist.push(m.rxPerSec); txHist.push(m.txPerSec);
+        const rx = m.rxPerSec, tx = m.txPerSec;
+        document.getElementById('rxRate').textContent = fmtRate(rx);
+        document.getElementById('txRate').textContent = fmtRate(tx);
+        document.getElementById('heroRx').textContent = fmtRate(rx);
+        document.getElementById('heroTx').textContent = fmtRate(tx);
+        rxHist.push(rx); txHist.push(tx);
         if (rxHist.length > 60) rxHist.shift();
         if (txHist.length > 60) txHist.shift();
         drawGraph();
@@ -287,6 +434,7 @@
   connectWs();
   setInterval(refresh, 2000);
   setInterval(refreshTunnel, 4000);
+  setInterval(renderSession, 10000);
 </script>
 </body>
 </html>
