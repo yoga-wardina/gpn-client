@@ -2,7 +2,7 @@ name: Build Windows exe
 
 on:
   push:
-    branches: [master]
+    branches: [master, main]
   workflow_dispatch:
 
 jobs:
@@ -18,11 +18,19 @@ jobs:
       - name: Install deps
         run: bun install
 
-      - name: Build
+      - name: Build exe
         run: bun run build:win
+
+      - name: Bundle portable zip (exe + assets)
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist/GPNClient | Out-Null
+          Copy-Item dist/GPNClient.exe dist/GPNClient/
+          Copy-Item -Recurse assets dist/GPNClient/assets
+          Compress-Archive -Path dist/GPNClient/* -DestinationPath dist/GPNClient-windows.zip -Force
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: GPNClient-windows
-          path: dist/GPNClient.exe
+          path: dist/GPNClient-windows.zip
