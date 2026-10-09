@@ -59,6 +59,27 @@ export function loadConfig(): Promise<void> {
   });
 }
 
+/** arbitrary persisted values stored inside gpn.config.json (e.g. wg key) */
+export function loadPersistedValue(key: string): string | null {
+  try {
+    const c = JSON.parse(readFileSync(CONFIG_PATH, "utf8"));
+    return typeof c[key] === "string" ? c[key] : null;
+  } catch {
+    return null;
+  }
+}
+
+export function savePersistedValue(key: string, value: string) {
+  try {
+    let c: Record<string, unknown> = {};
+    if (existsSync(CONFIG_PATH)) c = JSON.parse(readFileSync(CONFIG_PATH, "utf8"));
+    c[key] = value;
+    writeFileSync(CONFIG_PATH, JSON.stringify(c, null, 2));
+  } catch (e) {
+    console.error("[gpn] persist failed:", e);
+  }
+}
+
 export const config = DEFAULT_CONFIG;
 
 export function saveConfig(partial: Partial<Config>) {

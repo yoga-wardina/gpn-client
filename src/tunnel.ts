@@ -14,6 +14,15 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { run } from "./proc.ts";
+import { CONFIG_PATH, loadPersistedValue, savePersistedValue } from "./config.ts";
+
+/** client WG private key persisted next to the config */
+function loadClientKey(): string | null {
+  return loadPersistedValue("wgPrivateKey");
+}
+function saveClientKey(priv: string) {
+  savePersistedValue("wgPrivateKey", priv);
+}
 
 const WG_DIR = "C:\\Program Files\\WireGuard";
 const TUNNEL_DIR = join(WG_DIR, "Tunnel Configs");
@@ -57,8 +66,12 @@ export class TunnelManager {
   async register(apiUrl: string, token: string): Promise<TunnelState> {
     this.lastError = undefined;
     try {
-      // keypair (wg.exe genkey / pubkey)
-      const priv = (await run(this.wgExe("wg.exe"), ["genkey"])).trim();
+      // keypair — reuse persisted one if present so restarts keep the same WG identity
+      let priv = loadClientKey();
+      if (!priv) {
+        priv = (await run(this.wgExe("wg.exe"), ["genkey"])).trim();
+        saveClientKey(priv);
+      }
       const pub = (await run(this.wgExe("wg.exe"), ["pubkey"], 30_000, priv)).trim();
       this.clientPriv = priv;
       this.clientPub = pub;
