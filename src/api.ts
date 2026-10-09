@@ -2,6 +2,9 @@
 import type { Target } from "./watcher.ts";
 
 export class GpnApi {
+  /** WireGuard public key of this client (set after tunnel registration) */
+  peerKey: string | null = null;
+
   constructor(
     private baseUrl: string,
     private token: string
@@ -15,10 +18,12 @@ export class GpnApi {
   }
 
   private headers() {
-    return {
+    const h: Record<string, string> = {
       "content-type": "application/json",
       authorization: `Bearer ${this.token}`,
     };
+    if (this.peerKey) h["x-gpn-peer"] = this.peerKey;
+    return h;
   }
 
   async pushTargets(targets: Target[]) {

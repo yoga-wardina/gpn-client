@@ -60,6 +60,7 @@ export class TunnelManager {
       const pub = (await run(this.wgExe("wg.exe"), ["pubkey"], 30_000, priv)).trim();
       this.clientPriv = priv;
       this.clientPub = pub;
+      api.peerKey = pub;
 
       const res = await fetch(`${apiUrl.replace(/\/$/, "")}/api/register`, {
         method: "POST",
