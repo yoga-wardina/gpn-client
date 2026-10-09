@@ -52,6 +52,8 @@ export class TunnelManager {
   }
 
   /** Register with the GPN server and generate our keypair. */
+  constructor(private api?: { peerKey: string | null }) {}
+
   async register(apiUrl: string, token: string): Promise<TunnelState> {
     this.lastError = undefined;
     try {
@@ -60,7 +62,7 @@ export class TunnelManager {
       const pub = (await run(this.wgExe("wg.exe"), ["pubkey"], 30_000, priv)).trim();
       this.clientPriv = priv;
       this.clientPub = pub;
-      api.peerKey = pub;
+      if (this.api) this.api.peerKey = pub;
 
       const res = await fetch(`${apiUrl.replace(/\/$/, "")}/api/register`, {
         method: "POST",
