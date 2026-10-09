@@ -105,16 +105,22 @@ export class TunnelManager {
         await this.register(apiUrl, token);
       }
 
-      // notify the server (so its side routes for this peer) — best effort
-      await fetch(`${apiUrl.replace(/\/$/, "")}/api/targets`, {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          authorization: `Bearer ${token}`,
-          "x-gpn-peer": this.clientPub!,
-        },
-        body: JSON.stringify({ targets, ts: Date.now() }),
-      }).catch(() => {}); // server update is belt-and-braces; client side config is what matters
+      // notify the server (so its side routes for this peer) — REQUIRED, not best-effort
+      try {
+        const push = await fetch(`${apiUrl.replace(/\/$/, "")}/api/targets`, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            authorization: `Bearer ${token}`,
+            "x-gpn-peer": this.clientPub!,
+          },
+          body: JSON.stringify({ targets, ts: Date.now() }),
+        });
+        if (!push.ok) throw new Error(`HTTP ${push.status}: ${await push.text()}`);
+        console.log("[gpn] server-side routes synced");
+      } catch (e) {
+        console.error("[gpn] server-side route sync FAILED (traffic will bypass tunnel for new IPs):", e);
+      }
 
       const ips = [...new Set(targets.map((t) => t.ip))]
         .filter((ip) => ip !== "127.0.0.1" && !ip.startsWith("10.66.") && !ip.startsWith("192.168.") && !/^172\.(1[6-9]|2\d|3[01])\./.test(ip));
@@ -142,12 +148,24 @@ export class TunnelManager {
       ].join("\n");
       writeFileSync(confPath, conf);
 
-      // (re)install tunnel service — idempotent; reloads config
+      // (re)install tunnel service to apply the new AllowedIPs.
+      // Windows WireGuard needs uninstall+install to reload; doing it on every
+      // target change causes a ~1s blip but keeps routing correct.
       if (!this.tunnelUp) {
         await run(this.wgExe("wireguard.exe"), ["/installtunnelservice", confPath]);
         this.tunnelUp = true;
       } else {
-        // service is running; re-install replaces config. Need admin.
+        // verify the running config actually matches what we just wrote —
+        // if yes, skip the disruptive reload
+        try {
+          const cur = await run(this.wgExe("wg.exe"), ["show", TUNNEL_NAME, "allowed-ips"]);
+          const running = cur.trim().split("\n")[0]?.split("\t")[1] ?? "";
+          const want = ips.map((i) => `${i}/32`).join("  ");
+          const wantAlt = ips.map((i) => `${i}/32`).join(", ");
+          if (running === want || running === wantAlt || running.replace(/, /g, " ") === want) {
+            return this.state; // already in sync
+          }
+        } catch {}
         await run(this.wgExe("wireguard.exe"), ["/uninstalltunnelservice", TUNNEL_NAME]);
         await run(this.wgExe("wireguard.exe"), ["/installtunnelservice", confPath]);
       }
