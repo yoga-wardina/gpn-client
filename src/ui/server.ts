@@ -101,7 +101,7 @@ export function startUi(port: number, deps: UiDeps) {
 
       // WebSocket: live traffic + state stream (1s)
       if (url.pathname === "/ws") {
-        const success = server.upgrade(req, { data: {} });
+        const success = server.upgrade(req, { data: {} as never });
         if (!success) return new Response("upgrade failed", { status: 400 });
         return undefined as unknown as Response;
       }
