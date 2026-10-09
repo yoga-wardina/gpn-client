@@ -6,7 +6,7 @@
   "type": "module",
   "scripts": {
     "dev": "bun run src/main.ts",
-    "build:win": "bun build src/main.ts --compile --target=bun-windows-x64 --windows-icon=assets/icon.ico --outfile dist/GPNClient.exe",
+    "build:win": "bun build src/main.ts --compile --target=bun-windows-x64 --windows-hide-console --outfile dist/GPNClient.exe",
     "build:linux": "bun build src/main.ts --compile --target=bun-linux-x64 --outfile dist/gpn-client"
   },
   "devDependencies": {
