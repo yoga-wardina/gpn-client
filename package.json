@@ -1,0 +1,17 @@
+{
+  "name": "gpn-client",
+  "version": "0.1.0",
+  "description": "GPN desktop client - watches a game executable, detects its server IPs, pushes them to the GPN VPS for tunnel routing",
+  "module": "src/main.ts",
+  "type": "module",
+  "scripts": {
+    "dev": "bun run src/main.ts",
+    "build:win": "bun build src/main.ts --compile --target=bun-windows-x64 --windows-icon=assets/icon.ico --outfile dist/GPNClient.exe",
+    "build:linux": "bun build src/main.ts --compile --target=bun-linux-x64 --outfile dist/gpn-client"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.4.2",
+    "bun-types": "latest",
+    "typescript": "^7.0.2"
+  }
+}
