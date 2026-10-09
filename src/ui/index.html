@@ -119,7 +119,8 @@
       const s = await (await fetch('/api/state')).json();
       document.getElementById('dot').classList.toggle('off', !s.running);
       document.getElementById('statusText').textContent = s.running ? 'monitoring' : 'stopped';
-      document.getElementById('serverUrl').value = s.gpnServerUrl || '';
+      const urlInput = document.getElementById('serverUrl');
+      if (document.activeElement !== urlInput) urlInput.value = s.gpnServerUrl || '';
 
       const games = document.getElementById('games');
       games.innerHTML = s.watched.length ? '' : '<div class="empty">No games watched. Add an executable above.</div>';
