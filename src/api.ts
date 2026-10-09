@@ -27,6 +27,12 @@ export class GpnApi {
   }
 
   async pushTargets(targets: Target[]) {
+    // plain pushes need the peer key; before tunnel registration the tunnel
+    // module handles target routing itself — skip to avoid 400 spam
+    if (!this.peerKey) {
+      console.log("[gpn] skipping push (not registered yet — tunnel will sync targets)");
+      return { skipped: true };
+    }
     const res = await fetch(`${this.baseUrl}/api/targets`, {
       method: "POST",
       headers: this.headers(),
