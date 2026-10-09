@@ -19,6 +19,9 @@ const watcher = new GameWatcher(config.pollIntervalMs);
 // traffic sampler for live in/out rates (1s)
 startSampling(1000);
 
+// tunnel watchdog: force reconnect if handshake goes stale (NAT rebinds)
+tunnel.startWatchdog();
+
 // UI server (local web dashboard, ExitLag-style)
 startUi(config.uiPort, {
   watcher,

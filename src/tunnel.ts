@@ -14,7 +14,7 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { run } from "./proc.ts";
-import { CONFIG_PATH, loadPersistedValue, savePersistedValue } from "./config.ts";
+import { loadPersistedValue, savePersistedValue } from "./config.ts";
 
 /** client WG private key persisted next to the config */
 function loadClientKey(): string | null {
@@ -27,6 +27,9 @@ function saveClientKey(priv: string) {
 const WG_DIR = "C:\\Program Files\\WireGuard";
 const TUNNEL_DIR = join(WG_DIR, "Tunnel Configs");
 const TUNNEL_NAME = "gpn";
+
+/** path of the conf file the watchdog reloads from */
+let currentConfPath = join(TUNNEL_DIR, `${TUNNEL_NAME}.conf`);
 
 export interface TunnelState {
   registered: boolean;
@@ -143,10 +146,11 @@ export class TunnelManager {
         `PublicKey = ${this.serverPub}`,
         "AllowedIPs = " + ips.join(", "),
         `Endpoint = ${this.serverEndpoint}`,
-        "PersistentKeepalive = 25",
+        "PersistentKeepalive = 15",
         "",
       ].join("\n");
       writeFileSync(confPath, conf);
+      currentConfPath = confPath;
 
       // (re)install tunnel service to apply the new AllowedIPs.
       // Windows WireGuard needs uninstall+install to reload; doing it on every
@@ -193,5 +197,40 @@ export class TunnelManager {
       this.tunnelUp = false;
     }
     return this.tunnelUp;
+  }
+
+  /**
+   * Watchdog — every 30s: if the tunnel service is running but the latest
+   * handshake is older than 3 minutes (25s/15s keepalives should renew it
+   * every ~2min), the NAT mapping has gone stale: reinstall the service to
+   * force a fresh handshake. Requires admin, same as install.
+   */
+  startWatchdog(reloadConfPath: () => string = () => currentConfPath): () => void {
+    let stop = false;
+    const tick = async () => {
+      while (!stop) {
+        await new Promise((r) => setTimeout(r, 30_000));
+        if (stop) return;
+        try {
+          if (!(await this.probeStatus())) continue;
+          const out = await run(this.wgExe("wg.exe"), ["show", TUNNEL_NAME, "latest-handshakes"]);
+          const hsAgo = parseInt(out.trim().split("\t")[1] ?? "0", 10);
+          if (hsAgo > 180) {
+            console.log(`[gpn] watchdog: handshake stale (${hsAgo}s) — reloading tunnel`);
+            const confPath = reloadConfPath();
+            await run(this.wgExe("wireguard.exe"), ["/uninstalltunnelservice", TUNNEL_NAME]);
+            await new Promise((r) => setTimeout(r, 2000));
+            await run(this.wgExe("wireguard.exe"), ["/installtunnelservice", confPath]);
+            console.log("[gpn] watchdog: tunnel reloaded");
+          }
+        } catch (e) {
+          console.error("[gpn] watchdog error:", e);
+        }
+      }
+    };
+    tick();
+    return () => {
+      stop = true;
+    };
   }
 }
