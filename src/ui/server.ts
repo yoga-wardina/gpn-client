@@ -7,6 +7,7 @@ import type { GpnApi } from "../api.ts";
 import type { Config } from "../config.ts";
 import { saveConfig } from "../config.ts";
 import { getCachedMeta, resolveMeta } from "../meta.ts";
+import type { TunnelManager } from "../tunnel.ts";
 
 import HTML from "./index.html" with { type: "text" };
 
@@ -14,10 +15,11 @@ interface UiDeps {
   watcher: GameWatcher;
   api: GpnApi;
   config: Config;
+  tunnel: TunnelManager;
 }
 
 export function startUi(port: number, deps: UiDeps) {
-  const { watcher, api, config } = deps;
+  const { watcher, api, config, tunnel } = deps;
   watcher.start();
 
   Bun.serve({
@@ -71,6 +73,24 @@ export function startUi(port: number, deps: UiDeps) {
         saveConfig(partial);
         if (partial.gpnServerUrl) api.setServer(partial.gpnServerUrl);
         return json({ ok: true });
+      }
+
+      if (url.pathname === "/api/tunnel/state") {
+        return json({ ok: true, state: tunnel.state });
+      }
+
+      if (url.pathname === "/api/tunnel/register" && req.method === "POST") {
+        try {
+          await tunnel.register(config.gpnServerUrl, config.gpnToken);
+          return json({ ok: true, state: tunnel.state });
+        } catch (e) {
+          return json({ ok: false, error: String(e) }, 502);
+        }
+      }
+
+      if (url.pathname === "/api/tunnel/teardown" && req.method === "POST") {
+        await tunnel.teardown();
+        return json({ ok: true, state: tunnel.state });
       }
 
       if (url.pathname === "/api/ping" && req.method === "POST") {

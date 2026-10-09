@@ -86,6 +86,19 @@
       <tbody id="targets"><tr><td colspan="4" class="empty">No game traffic detected yet.</td></tr></tbody>
     </table>
 
+    <h2>Tunnel</h2>
+    <div class="card" style="display:block">
+      <div class="row" style="margin-bottom:10px">
+        <span id="tunnelStatus" style="font-size:13px;color:var(--dim)">tunnel: unknown</span>
+        <span id="tunnelIps" class="mono" style="font-size:12px;color:var(--dim);margin-left:auto"></span>
+      </div>
+      <div class="row">
+        <button class="btn primary" onclick="tunnelRegister()">Connect tunnel</button>
+        <button class="btn" onclick="tunnelTeardown()">Disconnect</button>
+      </div>
+      <div class="sub" style="margin-top:8px;font-size:12px;color:var(--dim)">Requires WireGuard for Windows installed. First connect must run as Administrator.</div>
+    </div>
+
     <h2>Settings</h2>
     <div class="card settings" style="display:block">
       <input id="serverUrl" placeholder="GPN server URL (e.g. https://gpn.example.com)">
@@ -177,8 +190,37 @@
     el.textContent = r.ok ? '✓ server reachable' : '✗ ' + (r.error || 'unreachable');
     el.style.color = r.ok ? 'var(--green)' : 'var(--red)';
   }
+  async function refreshTunnel() {
+    try {
+      const r = await (await fetch('/api/tunnel/state')).json();
+      const el = document.getElementById('tunnelStatus');
+      if (r.state.tunnelUp) {
+        el.textContent = 'tunnel: connected (' + (r.state.vpnIp || '?') + ')';
+        el.style.color = 'var(--green)';
+      } else if (r.state.registered) {
+        el.textContent = 'tunnel: registered, down';
+        el.style.color = 'var(--dim)';
+      } else {
+        el.textContent = 'tunnel: not registered';
+        el.style.color = 'var(--dim)';
+      }
+      document.getElementById('tunnelIps').textContent = (r.state.allowedIps || []).slice(0, 4).join(', ');
+    } catch {}
+  }
+  async function tunnelRegister() {
+    const el = document.getElementById('tunnelStatus');
+    el.textContent = 'tunnel: connecting…';
+    await fetch('/api/tunnel/register', { method: 'POST' });
+    refreshTunnel();
+  }
+  async function tunnelTeardown() {
+    await fetch('/api/tunnel/teardown', { method: 'POST' });
+    refreshTunnel();
+  }
   refresh();
+  refreshTunnel();
   setInterval(refresh, 2000);
+  setInterval(refreshTunnel, 4000);
 </script>
 </body>
 </html>

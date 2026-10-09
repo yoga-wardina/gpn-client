@@ -14,6 +14,10 @@ export interface Config {
   games: string[];
   /** Ports considered "game traffic" (empty = all) */
   gamePorts: number[];
+  /** Enable local WireGuard tunnel management (requires WireGuard for Windows + admin) */
+  tunnelEnabled: boolean;
+  /** Tear down the tunnel automatically when no game traffic */
+  tunnelTeardownWhenIdle: boolean;
 }
 
 export const DEFAULT_CONFIG: Config = {
@@ -23,6 +27,8 @@ export const DEFAULT_CONFIG: Config = {
   uiPort: 7790,
   games: [],
   gamePorts: [],
+  tunnelEnabled: true,
+  tunnelTeardownWhenIdle: true,
 };
 
 const CONFIG_PATH = join(import.meta.dir, "..", "gpn.config.json");

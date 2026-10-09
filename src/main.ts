@@ -5,9 +5,12 @@ import type { Target } from "./watcher.ts";
 import { startUi } from "./ui/server.ts";
 import { config, loadConfig } from "./config.ts";
 import { startTray, cleanStaleExitFlag } from "./tray.ts";
+import { TunnelManager } from "./tunnel.ts";
 
 await loadConfig();
 cleanStaleExitFlag();
+
+const tunnel = new TunnelManager();
 
 const api = new GpnApi(config.gpnServerUrl, config.gpnToken);
 const watcher = new GameWatcher(config.pollIntervalMs);
@@ -17,6 +20,7 @@ startUi(config.uiPort, {
   watcher,
   api,
   config,
+  tunnel,
 });
 
 console.log(`[gpn] UI ready at http://localhost:${config.uiPort}`);
@@ -49,10 +53,26 @@ watcher.on("targetsChanged", async (targets: Target[]) => {
   } catch (e) {
     console.error("[gpn] push failed:", e);
   }
+  // Update the local WireGuard tunnel with the new target set
+  if (config.tunnelEnabled && targets.length > 0) {
+    try {
+      await tunnel.applyTargets(config.gpnServerUrl, config.gpnToken, targets);
+      console.log(`[gpn] tunnel allowed-ips: ${targets.map((t) => t.ip).join(", ")}`);
+    } catch (e) {
+      console.error("[gpn] tunnel update failed:", e);
+    }
+  }
 });
 
-watcher.on("gameStarted", (proc) => console.log(`[gpn] game started: ${proc.name} (pid ${proc.pid})`));
 watcher.on("gameStopped", (proc) => console.log(`[gpn] game stopped: ${proc.name} (pid ${proc.pid})`));
+
+// When no more game targets, optionally tear down the tunnel (direct connection)
+watcher.on("targetsChanged", async (targets: Target[]) => {
+  if (config.tunnelEnabled && config.tunnelTeardownWhenIdle && targets.length === 0 && tunnel.state.tunnelUp) {
+    console.log("[gpn] no game traffic — tearing down tunnel");
+    await tunnel.teardown();
+  }
+});
 
 // Auto-watch from saved config
 for (const exe of config.games) {
