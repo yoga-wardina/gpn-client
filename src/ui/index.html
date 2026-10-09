@@ -119,9 +119,11 @@
               <div class="name">${esc(exe)}</div>
               <div class="sub">${live ? '<span style="color:var(--green)">● running</span>' : 'not running'}</div>
             </div>
-            <button onclick="unwatch('${esc(exe).replace(/'/g, "\\'")}')">Remove</button>
+            <button data-exe="${esc(exe)}" class="remove-btn">Remove</button>
           </div>`);
       }
+      games.querySelectorAll('.remove-btn').forEach(b =>
+        b.addEventListener('click', () => unwatch(b.dataset.exe)));
 
       const tb = document.getElementById('targets');
       if (!s.targets.length) {
