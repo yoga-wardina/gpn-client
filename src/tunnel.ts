@@ -116,20 +116,26 @@ export class TunnelManager {
         body: JSON.stringify({ targets, ts: Date.now() }),
       }).catch(() => {}); // server update is belt-and-braces; client side config is what matters
 
-      const ips = [...new Set(targets.map((t) => t.ip))];
+      const ips = [...new Set(targets.map((t) => t.ip))]
+        .filter((ip) => ip !== "127.0.0.1" && !ip.startsWith("10.66.") && !ip.startsWith("192.168.") && !/^172\.(1[6-9]|2\d|3[01])\./.test(ip));
+      if (!ips.length) {
+        console.log("[gpn] no routable game IPs — skipping tunnel update");
+        return this.state;
+      }
       this.allowedIps = ips;
 
-      // write wg-quick style config
+      // write wg-quick style config into the standard Program Files location
       if (!existsSync(TUNNEL_DIR)) mkdirSync(TUNNEL_DIR, { recursive: true });
       const confPath = join(TUNNEL_DIR, `${TUNNEL_NAME}.conf`);
       const conf = [
         "[Interface]",
         `PrivateKey = ${this.clientPriv}`,
         `Address = ${this.vpnIp}/32`,
+        "DNS = 1.1.1.1",
         "",
         "[Peer]",
         `PublicKey = ${this.serverPub}`,
-        "AllowedIPs = " + (ips.length ? ips.join(", ") : "0.0.0.0/0"),
+        "AllowedIPs = " + ips.join(", "),
         `Endpoint = ${this.serverEndpoint}`,
         "PersistentKeepalive = 25",
         "",
