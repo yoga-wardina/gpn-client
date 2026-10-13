@@ -522,8 +522,8 @@
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
-          username: (document.getElementById("authUser") as HTMLInputElement).value.trim(),
-          password: (document.getElementById("authPass") as HTMLInputElement).value,
+          username: document.getElementById("authUser").value.trim(),
+          password: document.getElementById("authPass").value,
         }),
       })).json();
       if (r.ok) {
@@ -543,7 +543,7 @@
     document.getElementById("authOverlay").classList.add("show");
   }
   document.getElementById("authPass").addEventListener("keydown", (e) => {
-    if ((e as KeyboardEvent).key === "Enter") doAuth();
+    if (e.key === "Enter") doAuth();
   });
   checkAuth();
 </script>
