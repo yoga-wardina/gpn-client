@@ -24,10 +24,50 @@ export function startUi(port: number, deps: UiDeps) {
   watcher.start();
   startSampling(1000);
 
+  // restore persisted session into the api client
+  if (config.auth) api.setSession(config.auth);
+  api.onSessionUpdate = (s) => {
+    saveConfig({ auth: s ?? undefined });
+  };
+
   const server = Bun.serve({
     port,
     async fetch(req) {
       const url = new URL(req.url);
+
+      // ===== auth proxy endpoints =====
+      if (url.pathname === "/api/auth/session") {
+        return json({
+          loggedIn: !!config.auth,
+          user: config.auth ? { username: config.auth.username, role: config.auth.role } : null,
+        });
+      }
+
+      if (url.pathname === "/api/auth/login" && req.method === "POST") {
+        const { username, password } = await req.json();
+        const r = await api.login(String(username ?? ""), String(password ?? ""));
+        if (r.ok && api.session) {
+          saveConfig({ auth: api.session });
+          return json({ ok: true, user: { username: api.session.username, role: api.session.role } });
+        }
+        return json({ ok: false, error: r.error }, 401);
+      }
+
+      if (url.pathname === "/api/auth/register" && req.method === "POST") {
+        const { username, password } = await req.json();
+        const r = await api.register(String(username ?? ""), String(password ?? ""));
+        if (r.ok && api.session) {
+          saveConfig({ auth: api.session });
+          return json({ ok: true, user: { username: api.session.username, role: api.session.role } });
+        }
+        return json({ ok: false, error: r.error }, 400);
+      }
+
+      if (url.pathname === "/api/auth/logout" && req.method === "POST") {
+        await api.logout();
+        saveConfig({ auth: undefined });
+        return json({ ok: true });
+      }
 
       if (url.pathname === "/api/state") {
         return json({
@@ -36,6 +76,7 @@ export function startUi(port: number, deps: UiDeps) {
           watched: watcher.listWatched(),
           meta: Object.fromEntries(watcher.listWatched().map((exe) => [exe, getCachedMeta(exe) ?? null])),
           gpnServerUrl: config.gpnServerUrl,
+          user: config.auth ? { username: config.auth.username, role: config.auth.role } : null,
           running: true,
         });
       }

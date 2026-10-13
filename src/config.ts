@@ -18,6 +18,14 @@ export interface Config {
   tunnelEnabled: boolean;
   /** Tear down the tunnel automatically when no game traffic */
   tunnelTeardownWhenIdle: boolean;
+  /** Logged-in user session (set by /api/auth flows) */
+  auth?: {
+    username: string;
+    role: string;
+    accessToken: string;
+    refreshToken: string;
+    expiresAt: number;
+  };
 }
 
 export const DEFAULT_CONFIG: Config = {

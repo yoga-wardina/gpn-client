@@ -117,13 +117,63 @@
   #graph { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; flex: 1; }
   .session-line { font-size: 12px; color: var(--dim); margin: 8px 2px 0; }
   .session-line b { color: var(--text); font-family: Consolas, monospace; }
+
+  /* ===== auth overlay ===== */
+  #authOverlay {
+    position: fixed; inset: 0; background: var(--bg); z-index: 100;
+    display: none; place-items: center;
+  }
+  #authOverlay.show { display: grid; }
+  .auth-card {
+    width: 360px; background: var(--panel); border: 1px solid var(--border);
+    border-radius: 16px; padding: 32px;
+  }
+  .auth-card .logo { text-align: center; font-size: 22px; margin-bottom: 6px; }
+  .auth-card .tagline { text-align: center; color: var(--dim); font-size: 13px; margin-bottom: 22px; }
+  .auth-card input {
+    width: 100%; background: var(--panel2); border: 1px solid var(--border); border-radius: 8px;
+    color: var(--text); padding: 11px 12px; font-size: 14px; outline: none; margin-bottom: 10px;
+  }
+  .auth-card input:focus { border-color: var(--accent); }
+  .auth-card .btn { width: 100%; margin: 0 0 8px; padding: 11px; }
+  .auth-err { color: var(--red); font-size: 12.5px; min-height: 16px; text-align: center; margin-bottom: 6px; }
+  .auth-switch { text-align: center; font-size: 12.5px; color: var(--dim); }
+  .auth-switch a { color: var(--accent); cursor: pointer; text-decoration: none; }
+  .user-badge {
+    display: flex; align-items: center; gap: 8px; font-size: 13px;
+    color: var(--dim);
+  }
+  .user-badge .uname { color: var(--text); font-weight: 600; }
+  .user-badge button {
+    background: none; border: 1px solid var(--border); color: var(--dim);
+    border-radius: 6px; padding: 3px 9px; cursor: pointer; font-size: 11.5px;
+  }
+  .user-badge button:hover { border-color: var(--red); color: var(--red); }
 </style>
 </head>
 <body>
   <div class="topbar">
     <div class="logo">GPN<span>CLIENT</span></div>
     <div class="status-pill"><div class="dot" id="dot"></div><span id="statusText">connecting…</span></div>
+    <div class="user-badge" id="userBadge" style="display:none">
+      <span><span class="uname" id="badgeUser"></span> <span id="badgeRole" style="opacity:.6"></span></span>
+      <button onclick="doLogout()">Log out</button>
+    </div>
   </div>
+
+  <!-- auth overlay -->
+  <div id="authOverlay" class="show">
+    <div class="auth-card">
+      <div class="logo">GPN<span>CLIENT</span></div>
+      <div class="tagline" id="authTagline">Sign in to your GPN account</div>
+      <div class="auth-err" id="authErr"></div>
+      <input id="authUser" placeholder="Username" autocomplete="username">
+      <input id="authPass" placeholder="Password" type="password" autocomplete="current-password">
+      <button class="btn primary" id="authBtn" onclick="doAuth()">Sign in</button>
+      <div class="auth-switch" id="authSwitch">No account? <a onclick="toggleAuthMode()">Register</a></div>
+    </div>
+  </div>
+
   <div class="wrap">
 
     <!-- hero: what state am I in -->
@@ -435,6 +485,67 @@
   setInterval(refresh, 2000);
   setInterval(refreshTunnel, 4000);
   setInterval(renderSession, 10000);
+
+  // ===== auth flow =====
+  let authMode = "login";
+  async function checkAuth() {
+    const s = await (await fetch("/api/auth/session")).json();
+    if (s.loggedIn) {
+      document.getElementById("authOverlay").classList.remove("show");
+      document.getElementById("userBadge").style.display = "flex";
+      document.getElementById("badgeUser").textContent = s.user.username;
+      document.getElementById("badgeRole").textContent = s.user.role === "admin" ? "· admin" : "";
+      return true;
+    }
+    document.getElementById("authOverlay").classList.add("show");
+    document.getElementById("userBadge").style.display = "none";
+    return false;
+  }
+  function toggleAuthMode() {
+    authMode = authMode === "login" ? "register" : "login";
+    document.getElementById("authBtn").textContent = authMode === "login" ? "Sign in" : "Create account";
+    document.getElementById("authTagline").textContent =
+      authMode === "login" ? "Sign in to your GPN account" : "Create a new GPN account";
+    document.getElementById("authSwitch").innerHTML =
+      authMode === "login"
+        ? 'No account? <a onclick="toggleAuthMode()">Register</a>'
+        : 'Have an account? <a onclick="toggleAuthMode()">Sign in</a>';
+    document.getElementById("authErr").textContent = "";
+  }
+  async function doAuth() {
+    const el = document.getElementById("authErr");
+    el.textContent = "";
+    const btn = document.getElementById("authBtn");
+    btn.disabled = true; btn.textContent = authMode === "login" ? "Signing in…" : "Creating…";
+    try {
+      const r = await (await fetch("/api/auth/" + authMode, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          username: (document.getElementById("authUser") as HTMLInputElement).value.trim(),
+          password: (document.getElementById("authPass") as HTMLInputElement).value,
+        }),
+      })).json();
+      if (r.ok) {
+        await checkAuth();
+        refresh();
+      } else {
+        el.textContent = r.error || "failed";
+      }
+    } catch (e) {
+      el.textContent = "network error — check server URL in settings";
+    }
+    btn.disabled = false; btn.textContent = authMode === "login" ? "Sign in" : "Create account";
+  }
+  async function doLogout() {
+    await fetch("/api/auth/logout", { method: "POST" });
+    document.getElementById("userBadge").style.display = "none";
+    document.getElementById("authOverlay").classList.add("show");
+  }
+  document.getElementById("authPass").addEventListener("keydown", (e) => {
+    if ((e as KeyboardEvent).key === "Enter") doAuth();
+  });
+  checkAuth();
 </script>
 </body>
 </html>
