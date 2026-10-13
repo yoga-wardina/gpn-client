@@ -163,13 +163,30 @@ export function startUi(port: number, deps: UiDeps) {
     },
     websocket: {
       open(ws) {
-        // start a per-socket push loop
+        // per-socket push loop: full state snapshot whenever it changes,
+        // traffic rates every 1s, heartbeat every 5s
         let stop = false;
         (ws.data as unknown as { _stop?: () => void })._stop = () => {
           stop = true;
         };
+
+        const snapshot = () => ({
+          procs: watcher.listProcs(),
+          targets: watcher.listTargets(),
+          watched: watcher.listWatched(),
+          meta: Object.fromEntries(watcher.listWatched().map((exe) => [exe, getCachedMeta(exe) ?? null])),
+          gpnServerUrl: config.gpnServerUrl,
+          user: config.auth ? { username: config.auth.username, role: config.auth.role } : null,
+          tunnel: tunnel.state,
+          running: true,
+        });
+        const snapKey = (s: ReturnType<typeof snapshot>) =>
+          JSON.stringify([s.procs, s.targets, s.watched, s.user, s.tunnel, s.gpnServerUrl]);
+        let lastSnap = "";
+
         (async () => {
           while (!stop) {
+            // 1) traffic rates (every 1s)
             const s = currentSample();
             try {
               ws.send(JSON.stringify({
@@ -179,10 +196,19 @@ export function startUi(port: number, deps: UiDeps) {
                 rxBytes: s.rxBytes,
                 txBytes: s.txBytes,
                 ts: s.ts,
-                targets: watcher.listTargets().length,
-                procs: watcher.listProcs().length,
               }));
             } catch {}
+
+            // 2) full state only when changed
+            const snap = snapshot();
+            const key = snapKey(snap);
+            if (key !== lastSnap) {
+              lastSnap = key;
+              try {
+                ws.send(JSON.stringify({ type: "state", state: snap }));
+              } catch {}
+            }
+
             await new Promise((r) => setTimeout(r, 1000));
           }
         })();
