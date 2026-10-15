@@ -1,9 +1,13 @@
 /**
  * GameWatcher — watches for a game process and polls its network connections.
  * Works on Windows (netstat) and Linux (ss) by parsing per-PID socket tables.
+ *
+ * Only established TCP connections to public IPv4 hosts are reported. UDP is not
+ * detected on Windows: netstat lists UDP sockets without a remote address.
  */
-import { spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
+import { run } from "./proc.ts";
+import { baseName, isPublicIpv4, sleep } from "./net.ts";
 
 export interface GameProc {
   pid: number;
@@ -20,31 +24,34 @@ export interface Target {
 
 interface ConnLine {
   pid: number;
-  local: string;
   remote: string;
   proto: "tcp" | "udp";
-  state: string;
 }
 
-export class GameWatcher extends EventEmitter {
-  private watchedExes: string[] = [];
-  private activeProcs = new Map<number, GameProc>();
-  private targets = new Map<string, Target>(); // key: ip:port:proto
-  private timer: ReturnType<typeof setInterval> | null = null;
-  private pollMs: number;
+// English TCP states that mean "not an active connection". (Windows localizes state names;
+// on other locales nothing is excluded here and only the remote-port check applies.)
+const DEAD_STATES = new Set(["TIME_WAIT", "CLOSE_WAIT", "FIN_WAIT_1", "FIN_WAIT_2", "LAST_ACK", "CLOSING", "SYN_SENT", "SYN_RECEIVED"]);
 
-  constructor(pollMs = 2000) {
+export class GameWatcher extends EventEmitter {
+  private watchedExes: string[] = []; // lowercase file names
+  private activeProcs = new Map<number, GameProc>();
+  private targets = new Map<string, Target>(); // key: proto:ip:port
+  private running = false;
+
+  constructor(
+    private pollMs = 2000,
+    private getPorts: () => number[] = () => []
+  ) {
     super();
-    this.pollMs = pollMs;
   }
 
   watchExecutable(nameOrPath: string) {
-    const n = nameOrPath.toLowerCase();
-    if (!this.watchedExes.includes(n)) this.watchedExes.push(n);
+    const n = baseName(nameOrPath).toLowerCase();
+    if (n && !this.watchedExes.includes(n)) this.watchedExes.push(n);
   }
 
   unwatchExecutable(nameOrPath: string) {
-    const n = nameOrPath.toLowerCase();
+    const n = baseName(nameOrPath).toLowerCase();
     this.watchedExes = this.watchedExes.filter((x) => x !== n);
   }
 
@@ -61,14 +68,25 @@ export class GameWatcher extends EventEmitter {
   }
 
   start() {
-    if (this.timer) return;
-    this.timer = setInterval(() => this.tick().catch((e) => console.error("[watcher]", e)), this.pollMs);
-    this.tick().catch(() => {});
+    if (this.running) return;
+    this.running = true;
+    void this.loop();
   }
 
   stop() {
-    if (this.timer) clearInterval(this.timer);
-    this.timer = null;
+    this.running = false;
+  }
+
+  /** Self-scheduling so a slow netstat can never cause overlapping ticks. */
+  private async loop() {
+    while (this.running) {
+      try {
+        await this.tick();
+      } catch (e) {
+        console.error("[watcher]", e);
+      }
+      await sleep(this.pollMs);
+    }
   }
 
   private async tick() {
@@ -94,114 +112,107 @@ export class GameWatcher extends EventEmitter {
     }
 
     const conns = await this.getConnections(procs.map((p) => p.pid));
+    const ports = this.getPorts();
     const now = Date.now();
     const prevKeys = new Set(this.targets.keys());
 
     for (const c of conns) {
-      const ip = c.remote.split(":").slice(0, -1).join(":"); // handle IPv6 [::]:port too
-      if (!ip || ip === "0.0.0.0" || ip === "::" || ip === "-") continue;
-      const portStr = c.remote.split(":").pop() ?? "";
-      const port = parseInt(portStr, 10);
-      const key = `${c.proto}:${ip}:${port}`;
+      const ep = parseEndpoint(c.remote);
+      if (!ep || !isPublicIpv4(ep.ip)) continue;
+      if (ports.length && !ports.includes(ep.port)) continue;
+      const key = `${c.proto}:${ep.ip}:${ep.port}`;
       const existing = this.targets.get(key);
-      if (existing) {
-        existing.lastSeen = now;
-      } else {
-        this.targets.set(key, { ip, port, proto: c.proto, firstSeen: now, lastSeen: now });
-      }
+      if (existing) existing.lastSeen = now;
+      else this.targets.set(key, { ip: ep.ip, port: ep.port, proto: c.proto, firstSeen: now, lastSeen: now });
     }
 
-    // expire stale targets not seen this round
+    // expire targets not seen recently
     for (const [k, t] of this.targets) {
       if (t.lastSeen < now - this.pollMs * 3) this.targets.delete(k);
     }
 
-    const changed =
-      prevKeys.size !== this.targets.size ||
-      [...this.targets.keys()].some((k) => !prevKeys.has(k));
+    const changed = prevKeys.size !== this.targets.size || [...this.targets.keys()].some((k) => !prevKeys.has(k));
     if (changed) this.emit("targetsChanged", this.listTargets());
   }
 
-  private async findWatchedProcesses(): Promise<GameProc[]> {
-    if (process.platform === "win32") {
-      // tasklist CSV: "Image Name","PID","Session Name","Session#","Mem Usage"
-      const out = await run("tasklist", ["/FO", "CSV", "/NH"]);
-      const rows = parseCsvLines(out);
-      return rows
-        .filter((r) => this.watchedExes.some((w) => r[0]?.toLowerCase().includes(w)))
-        .map((r) => ({ name: r[0], pid: parseInt(r[1], 10) }))
-        .filter((p) => !isNaN(p.pid));
-    } else {
-      // linux/mac: ps aux
-      const out = await run("ps", ["-eo", "pid,comm"]);
-      return out
-        .trim()
-        .split("\n")
-        .slice(1)
-        .map((line) => {
-          const [pidStr, ...rest] = line.trim().split(/\s+/);
-          return { pid: parseInt(pidStr, 10), name: rest.join(" ") };
-        })
-        .filter((p) => !isNaN(p.pid) && this.watchedExes.some((w) => p.name.toLowerCase().includes(w)));
-    }
+  private matches(procName: string, minTruncatedLen: number): boolean {
+    const name = procName.toLowerCase();
+    // tasklist/ps truncate long image names; accept a truncated prefix of a watched name
+    return this.watchedExes.some((w) => name === w || (name.length >= minTruncatedLen && w.startsWith(name)));
   }
 
-  private async getConnectionIds(pids: number[]): Promise<Set<number>> {
-    return new Set(pids);
+  private async findWatchedProcesses(): Promise<GameProc[]> {
+    if (!this.watchedExes.length) return [];
+    if (process.platform === "win32") {
+      // tasklist CSV: "Image Name","PID","Session Name","Session#","Mem Usage"
+      const out = await run("tasklist", ["/FO", "CSV", "/NH"], 10_000);
+      return parseCsvLines(out)
+        .filter((r) => r[0] && this.matches(r[0], 25))
+        .map((r) => ({ name: r[0]!, pid: parseInt(r[1] ?? "", 10) }))
+        .filter((p) => !isNaN(p.pid));
+    }
+    const out = await run("ps", ["-eo", "pid,comm"], 10_000);
+    return out
+      .trim()
+      .split("\n")
+      .slice(1)
+      .map((line) => {
+        const [pidStr, ...rest] = line.trim().split(/\s+/);
+        return { pid: parseInt(pidStr ?? "", 10), name: rest.join(" ") };
+      })
+      .filter((p) => !isNaN(p.pid) && this.matches(p.name, 15));
   }
 
   private async getConnections(pids: number[]): Promise<ConnLine[]> {
     const wanted = new Set(pids);
+    const lines: ConnLine[] = [];
     if (process.platform === "win32") {
-      // netstat -nao: Proto Local Foreign State PID
-      const out = await run("netstat", ["-nao"]);
-      const lines: ConnLine[] = [];
+      // netstat -nao TCP rows: Proto Local Foreign State PID  (UDP rows have no state => 4 columns, skipped)
+      const out = await run("netstat", ["-nao"], 10_000);
       for (const line of out.split("\n")) {
         const parts = line.trim().split(/\s+/);
         if (parts.length < 5) continue;
-        const [proto, local, remote, state, pidStr] = parts;
+        const [proto, , remote, state, pidStr] = parts as [string, string, string, string, string];
+        if (!proto.toLowerCase().startsWith("tcp")) continue;
         const pid = parseInt(pidStr, 10);
         if (isNaN(pid) || !wanted.has(pid)) continue;
-        const p = proto.toLowerCase();
-        if (!p.startsWith("tcp") && !p.startsWith("udp")) continue;
-        lines.push({
-          pid,
-          local,
-          remote,
-          state: p.startsWith("udp") ? "UDP" : state,
-          proto: p.startsWith("udp") ? "udp" : "tcp",
-        });
+        if (DEAD_STATES.has(state.toUpperCase())) continue;
+        lines.push({ pid, remote, proto: "tcp" });
       }
-      return lines;
     } else {
-      // ss -tunap: Netid State Local Peer Process
-      const out = await run("ss", ["-tunap"]);
-      const lines: ConnLine[] = [];
+      // ss -tunap: Netid State Recv-Q Send-Q Local Peer Process
+      const out = await run("ss", ["-tunap"], 10_000);
       for (const line of out.split("\n").slice(1)) {
         const parts = line.trim().split(/\s+/);
-        if (parts.length < 5) continue;
-        const [netid, , local, remote] = parts;
-        const procMatch = line.match(/pid=(\d+)/);
-        if (!procMatch) continue;
-        const pid = parseInt(procMatch[1], 10);
-        if (!wanted.has(pid)) continue;
-        const proto = netid === "udp" ? "udp" : "tcp";
-        lines.push({ pid, local, remote, state: netid, proto });
+        if (parts.length < 6 || parts[1] !== "ESTAB") continue;
+        const pid = parseInt(line.match(/pid=(\d+)/)?.[1] ?? "", 10);
+        if (isNaN(pid) || !wanted.has(pid)) continue;
+        lines.push({ pid, remote: parts[5]!, proto: parts[0] === "udp" ? "udp" : "tcp" });
       }
-      return lines;
     }
+    return lines;
   }
 }
 
-function run(cmd: string, args: string[]): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const p = spawn(cmd, args, { windowsHide: true });
-    let out = "";
-    p.stdout.on("data", (d) => (out += d.toString()));
-    p.stderr.on("data", () => {});
-    p.on("error", reject);
-    p.on("close", () => resolve(out));
-  });
+/** "1.2.3.4:443", "[2001:db8::1]:443" or "[::ffff:1.2.3.4]:443" -> {ip, port}; null for "*:*" etc. */
+function parseEndpoint(s: string): { ip: string; port: number } | null {
+  let host: string;
+  let portStr: string;
+  const m = /^\[(.+)\]:(\d+)$/.exec(s);
+  if (m) {
+    host = m[1]!;
+    portStr = m[2]!;
+  } else {
+    const i = s.lastIndexOf(":");
+    if (i < 0) return null;
+    host = s.slice(0, i);
+    portStr = s.slice(i + 1);
+  }
+  const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/i.exec(host);
+  if (mapped) host = mapped[1]!;
+  const port = parseInt(portStr, 10);
+  if (!Number.isInteger(port) || port <= 0) return null; // 0 = LISTENING rows
+  return { ip: host, port };
 }
 
 function parseCsvLines(text: string): string[][] {

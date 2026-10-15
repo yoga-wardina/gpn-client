@@ -71,14 +71,16 @@ export async function resolveMeta(exe: string): Promise<GameMeta> {
 
 async function resolveWindows(exe: string): Promise<GameMeta> {
   const fallback: GameMeta = { name: stripExe(basename(exe)), source: "filename" };
-  // only try shell lookups if we have a real path with a directory
+  // only try shell lookups if we have a real path with a directory that exists
   if (!exe.includes("\\") && !exe.includes("/")) return fallback;
+  if (!/\.exe$/i.test(exe) || !existsSync(exe)) return fallback;
 
   try {
     // Version info: FileDescription is what games usually set (e.g. "AION2 Game Client")
     const ps = [
       `$ErrorActionPreference='Stop'`,
-      `$f = Get-Item -LiteralPath '${exe.replace(/'/g, "''")}'`,
+      // the path is passed via the environment, never interpolated into the script (no injection)
+      `$f = Get-Item -LiteralPath $env:GPN_EXE`,
       `$v = $f.VersionInfo`,
       `$i = $null`,
       `try {`,
@@ -94,7 +96,7 @@ async function resolveWindows(exe: string): Promise<GameMeta> {
       `@{ name = @($v.FileDescription, $v.ProductName, $f.Name) | Where-Object { $_ } | Select-Object -First 1;`,
       `   company = $v.CompanyName; icon = $i } | ConvertTo-Json -Compress`,
     ].join("; ");
-    const out = await run("powershell", ["-NoProfile", "-NonInteractive", "-Command", ps], 15_000);
+    const out = await run("powershell", ["-NoProfile", "-NonInteractive", "-Command", ps], 15_000, undefined, { GPN_EXE: exe });
     const trimmed = out.trim();
     if (!trimmed) return fallback;
     const obj = JSON.parse(trimmed.startsWith("{") ? trimmed : `{${trimmed}}`);

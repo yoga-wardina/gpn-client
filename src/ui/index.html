@@ -169,6 +169,7 @@
       <div class="auth-err" id="authErr"></div>
       <input id="authUser" placeholder="Username" autocomplete="username">
       <input id="authPass" placeholder="Password" type="password" autocomplete="current-password">
+      <input id="authInvite" placeholder="Invite code (if required)" autocomplete="off" style="display:none">
       <button class="btn primary" id="authBtn" onclick="doAuth()">Sign in</button>
       <div class="auth-switch" id="authSwitch">No account? <a onclick="toggleAuthMode()">Register</a></div>
     </div>
@@ -368,11 +369,14 @@
     await fetch('/api/unwatch', { method: 'POST', headers: {'content-type':'application/json'}, body: JSON.stringify({ exe }) });
   }
   async function saveSettings() {
-    await fetch('/api/settings', { method: 'POST', headers: {'content-type':'application/json'}, body: JSON.stringify({
+    const r = await (await fetch('/api/settings', { method: 'POST', headers: {'content-type':'application/json'}, body: JSON.stringify({
       gpnServerUrl: document.getElementById('serverUrl').value.trim(),
       gpnToken: document.getElementById('token').value.trim(),
-    })});
-    document.getElementById('pingResult').textContent = 'saved';
+    })})).json();
+    const el = document.getElementById('pingResult');
+    el.textContent = r.ok ? 'saved' : '✗ ' + (r.error || 'failed');
+    el.style.color = r.ok ? 'var(--green)' : 'var(--red)';
+    if (r.ok) checkAuth();
   }
   async function pingServer() {
     const el = document.getElementById('pingResult');
@@ -389,7 +393,7 @@
     const el = document.getElementById('tunnelStatus');
     const btn = document.getElementById('connectBtn');
     if (tunnelIsUp) {
-      el.innerHTML = 'tunnel: <span style="color:var(--green)">connected</span> — tunnel IP: <span class="mono">' + (state.vpnIp || '?') + '</span>';
+      el.innerHTML = 'tunnel: <span style="color:var(--green)">connected</span> — tunnel IP: <span class="mono">' + esc(state.vpnIp || '?') + '</span>';
       btn.disabled = true;
     } else if (state.registered) {
       el.innerHTML = 'tunnel: <span style="color:var(--amber)">registered, down</span>';
@@ -406,7 +410,8 @@
   async function tunnelRegister() {
     const el = document.getElementById('tunnelStatus');
     el.textContent = 'tunnel: connecting…';
-    await fetch('/api/tunnel/register', { method: 'POST' });
+    const r = await (await fetch('/api/tunnel/register', { method: 'POST' })).json().catch(() => ({}));
+    if (r.ok === false) el.textContent = 'tunnel: failed — ' + (r.error || 'unknown error');
   }
   async function tunnelTeardown() {
     await fetch('/api/tunnel/teardown', { method: 'POST' });
@@ -475,6 +480,7 @@
     };
   }
   checkAuth();
+  setInterval(() => checkAuth().catch(() => {}), 15000);
 
   // ===== auth flow =====
   let authMode = "login";
@@ -501,6 +507,7 @@
         ? 'No account? <a onclick="toggleAuthMode()">Register</a>'
         : 'Have an account? <a onclick="toggleAuthMode()">Sign in</a>';
     document.getElementById("authErr").textContent = "";
+    document.getElementById("authInvite").style.display = authMode === "register" ? "" : "none";
   }
   async function doAuth() {
     const el = document.getElementById("authErr");
@@ -514,6 +521,7 @@
         body: JSON.stringify({
           username: document.getElementById("authUser").value.trim(),
           password: document.getElementById("authPass").value,
+          inviteCode: document.getElementById("authInvite").value.trim(),
         }),
       })).json();
       if (r.ok) {

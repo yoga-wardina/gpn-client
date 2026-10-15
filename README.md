@@ -8,14 +8,19 @@ traffic is routed through the tunnel.
 
 ```
 [Game process] --sockets--> [GPN Client watcher] --POST /api/targets--> [GPN VPS]
-                                                                    (nftables/WireGuard routes only those IPs)
+                                 |
+                                 +--> local WireGuard tunnel (AllowedIPs = only the game IPs)
 ```
 
 - **Watcher** polls `tasklist` + `netstat -nao` (Windows) or `ps` + `ss` (Linux) every 2s,
-  matching PIDs of watched executables, and extracts remote IPs.
-- **UI** is a local dashboard at `http://localhost:7790` (dark, ExitLag-style):
-  add/remove watched games, live target feed, server settings.
-- **API client** pushes new target sets to your GPN server with a Bearer token.
+  matching watched executables by file name and collecting *established TCP* connections to
+  public IPv4 hosts. UDP is not detected on Windows yet (netstat shows no UDP remote).
+- **Tunnel** (Windows, needs WireGuard for Windows + an elevated app): registers a persistent
+  key with the server, writes a split-tunnel config, and updates it (debounced, serialized)
+  when the target set changes. Goes idle after 60s without game traffic.
+- **UI** is a local dashboard at `http://localhost:7790`, bound to loopback only and protected
+  against cross-site requests (Host/Origin checks).
+- Requests use your logged-in user session (auto-refreshed); the shared token is only a fallback.
 
 ## Run (dev)
 
@@ -39,21 +44,27 @@ or locally:
 bun run build:win   # -> dist/GPNClient.exe
 ```
 
-## Config (`gpn.config.json`)
+## Config (`gpn.config.json`, next to the exe; restricted to the current user)
 
 ```json
 {
   "gpnServerUrl": "https://gpn.example.com",
-  "gpnToken": "shared-secret",
+  "gpnToken": "",
   "pollIntervalMs": 2000,
   "uiPort": 7790,
   "games": ["valorant.exe"],
-  "gamePorts": []
+  "gamePorts": [],
+  "tunnelEnabled": true,
+  "tunnelTeardownWhenIdle": true,
+  "tunnelLiveUpdate": false
 }
 ```
 
-## GPN server API expected
+`gamePorts`: if non-empty, only these remote ports count. `tunnelLiveUpdate` (experimental)
+applies target changes without restarting the tunnel service. The server URL must be
+`https://` (plain `http://` only for localhost). `wgPrivateKey` and `auth` are stored here too.
 
-- `POST /api/targets` — body `{ "targets": [{ "ip", "port", "proto", "firstSeen", "lastSeen" }], "ts" }`,
-  header `Authorization: Bearer <token>`.
-- `GET /api/health` — for the "Test connection" button.
+## GPN server API used
+
+- `POST /api/auth/{register,login,refresh,logout}`, `POST /api/register`,
+  `POST /api/targets` (Bearer: user session, or the shared token), `GET /api/health`.

@@ -1,5 +1,5 @@
 # GPN Client tray icon (runs hidden, controlled by files in the app dir)
-param([string]$Port = "7790", [string]$StateDir = ".")
+param([string]$Port = "7790", [string]$StateDir = ".", [string]$IconPath = "")
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
@@ -7,8 +7,11 @@ Add-Type -AssemblyName System.Drawing
 $exitFlag = Join-Path $StateDir "tray.exit"
 if (Test-Path $exitFlag) { Remove-Item $exitFlag -Force }
 
-$icon = New-Object System.Drawing.Icon((Join-Path $StateDir "assets\gpn.ico"))
-# fallback: default application icon if custom .ico missing
+$icon = $null
+if ($IconPath -and (Test-Path $IconPath)) {
+    try { $icon = New-Object System.Drawing.Icon($IconPath) } catch { $icon = $null }
+}
+# fallback: default application icon if the custom .ico is missing/invalid
 if (-not $icon) { $icon = [System.Drawing.SystemIcons]::Application }
 
 $notify = New-Object System.Windows.Forms.NotifyIcon

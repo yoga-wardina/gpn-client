@@ -1,85 +1,148 @@
 // GPN Client — watches a game process, detects its server IPs, pushes them to the GPN VPS.
+import { spawn } from "node:child_process";
 import { GameWatcher } from "./watcher.ts";
-import { GpnApi } from "./api.ts";
 import type { Target } from "./watcher.ts";
+import { GpnApi } from "./api.ts";
 import { startUi } from "./ui/server.ts";
-import { config, loadConfig } from "./config.ts";
+import { config, loadConfig, saveConfig } from "./config.ts";
 import { startTray, cleanStaleExitFlag } from "./tray.ts";
 import { TunnelManager } from "./tunnel.ts";
 import { startSampling } from "./traffic.ts";
+import { isPublicIpv4, sameSet } from "./net.ts";
+
+/** How long to wait with no game connections before dropping routes/tunnel (loading screens etc.). */
+const IDLE_GRACE_MS = 60_000;
+/** Coalesce bursts of new connections into one update. */
+const DEBOUNCE_MS = 1_500;
 
 await loadConfig();
 cleanStaleExitFlag();
 
-const tunnel = new TunnelManager();
-
 const api = new GpnApi(config.gpnServerUrl, config.gpnToken);
-const watcher = new GameWatcher(config.pollIntervalMs);
+if (config.auth) api.setSession(config.auth);
+api.onSessionUpdate = (s) => saveConfig({ auth: s ?? undefined });
 
-// traffic sampler for live in/out rates (1s)
-startSampling(1000);
+const tunnel = new TunnelManager(api);
+await tunnel.init(); // adopt a tunnel left running by a previous run
 
-// tunnel watchdog: force reconnect if handshake goes stale (NAT rebinds)
-tunnel.startWatchdog();
+const watcher = new GameWatcher(config.pollIntervalMs, () => config.gamePorts);
+
+// traffic sampler for live in/out rates (single loop; follows the tunnel when it's up)
+startSampling(2000, () => tunnel.state.tunnelUp);
+
+// tunnel watchdog: force reconnect if the handshake goes stale (NAT rebinds)
+const stopWatchdog = tunnel.startWatchdog();
 
 // UI server (local web dashboard, ExitLag-style)
-startUi(config.uiPort, {
-  watcher,
-  api,
-  config,
-  tunnel,
-});
+startUi(config.uiPort, { watcher, api, config, tunnel });
 
 console.log(`[gpn] UI ready at http://localhost:${config.uiPort}`);
-console.log(`[gpn] GPN server: ${config.gpnServerUrl}`);
+console.log(`[gpn] GPN server: ${api.serverUrl}`);
 
 // Tray icon (Windows) — Quit writes tray.exit which triggers shutdown here.
 const tray = startTray(config.uiPort);
-tray.onQuitRequested(() => {
-  console.log("[gpn] quit requested from tray");
+tray.onQuitRequested(() => void shutdown("tray quit"));
+
+let shuttingDown = false;
+async function shutdown(why: string) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`[gpn] shutting down (${why})`);
+  stopWatchdog();
+  tray.stop();
+  if (config.tunnelEnabled) await tunnel.teardown().catch(() => {}); // don't leave the VPN running headless
   process.exit(0);
-});
+}
+process.on("SIGINT", () => void shutdown("SIGINT"));
+process.on("SIGTERM", () => void shutdown("SIGTERM"));
 
 // Auto-open dashboard in the default browser (skip in dev with GPN_NO_OPEN=1)
 if (!process.env.GPN_NO_OPEN) {
-  const open =
+  const target = `http://localhost:${config.uiPort}`;
+  const [cmd, args] =
     process.platform === "win32"
-      ? ["cmd", ["/c", "start", "", `http://localhost:${config.uiPort}`]] as const
+      ? (["cmd", ["/c", "start", "", target]] as const)
       : process.platform === "darwin"
-        ? ["open", [`http://localhost:${config.uiPort}`]] as const
-        : ["xdg-open", [`http://localhost:${config.uiPort}`]] as const;
-  import("node:child_process").then(({ spawn }) => {
-    spawn(open[0], [...open[1]], { detached: true, stdio: "ignore", windowsHide: true }).unref();
-  });
+        ? (["open", [target]] as const)
+        : (["xdg-open", [target]] as const);
+  spawn(cmd, [...args], { detached: true, stdio: "ignore", windowsHide: true }).unref();
 }
 
-watcher.on("targetsChanged", async (targets: Target[]) => {
-  console.log(`[gpn] active game IPs: ${targets.map((t) => t.ip).join(", ")}`);
-  try {
-    await api.pushTargets(targets);
-  } catch (e) {
-    console.error("[gpn] push failed:", e);
+// ---- target orchestration: debounced, coalesced and strictly serialized ----
+let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+let idleTimer: ReturnType<typeof setTimeout> | null = null;
+let pendingIps: string[] | null = null;
+let applying = false;
+
+function publicIps(targets: Target[]): string[] {
+  return [...new Set(targets.map((t) => t.ip))].filter(isPublicIpv4).sort();
+}
+
+watcher.on("targetsChanged", (targets: Target[]) => {
+  const ips = publicIps(targets);
+  console.log(`[gpn] active game IPs: ${ips.join(", ") || "(none)"}`);
+
+  if (ips.length === 0) {
+    // game connections vanish briefly on loading screens / server transfers: wait before tearing down
+    if (debounceTimer) clearTimeout(debounceTimer);
+    debounceTimer = null;
+    pendingIps = null;
+    idleTimer ??= setTimeout(() => {
+      idleTimer = null;
+      void goIdle();
+    }, IDLE_GRACE_MS);
+    return;
   }
-  // Update the local WireGuard tunnel with the new target set
-  if (config.tunnelEnabled && targets.length > 0) {
-    try {
-      await tunnel.applyTargets(config.gpnServerUrl, config.gpnToken, targets);
-      console.log(`[gpn] tunnel allowed-ips: ${targets.map((t) => t.ip).join(", ")}`);
-    } catch (e) {
-      console.error("[gpn] tunnel update failed:", e);
-    }
-  }
+
+  if (idleTimer) clearTimeout(idleTimer);
+  idleTimer = null;
+  pendingIps = ips;
+  if (debounceTimer) clearTimeout(debounceTimer);
+  debounceTimer = setTimeout(() => {
+    debounceTimer = null;
+    void drain();
+  }, DEBOUNCE_MS);
 });
+
+async function drain() {
+  if (applying) return; // the running drain loop will pick up pendingIps
+  applying = true;
+  try {
+    while (pendingIps) {
+      const ips = pendingIps;
+      pendingIps = null;
+      const st = tunnel.state;
+      if (st.tunnelUp && sameSet(st.allowedIps, ips)) continue; // nothing new
+      try {
+        if (config.tunnelEnabled) {
+          await tunnel.applyTargets(ips); // registers, syncs the server, updates AllowedIPs
+          console.log(`[gpn] tunnel allowed-ips: ${ips.join(", ")}`);
+        } else {
+          await api.pushTargets(ips);
+        }
+      } catch (e) {
+        console.error("[gpn] target update failed:", e);
+      }
+    }
+  } finally {
+    applying = false;
+  }
+}
+
+async function goIdle() {
+  console.log("[gpn] no game traffic");
+  try {
+    if (api.peerKey) await api.pushTargets([]).catch((e) => console.error("[gpn] clearing server targets failed:", e));
+    if (config.tunnelEnabled && config.tunnelTeardownWhenIdle && tunnel.state.tunnelUp) {
+      console.log("[gpn] tearing down tunnel");
+      await tunnel.teardown();
+    }
+  } catch (e) {
+    console.error("[gpn] idle handling failed:", e);
+  }
+}
 
 watcher.on("gameStopped", (proc) => console.log(`[gpn] game stopped: ${proc.name} (pid ${proc.pid})`));
-
-// When no more game targets, optionally tear down the tunnel (direct connection)
-watcher.on("targetsChanged", async (targets: Target[]) => {
-  if (config.tunnelEnabled && config.tunnelTeardownWhenIdle && targets.length === 0 && tunnel.state.tunnelUp) {
-    console.log("[gpn] no game traffic — tearing down tunnel");
-    await tunnel.teardown();
-  }
-});
 
 // Auto-watch from saved config
 for (const exe of config.games) {
